@@ -1,0 +1,31 @@
+[package]
+name = "qenc-cli"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "CLI for QENC post-quantum encrypted containers"
+repository = { workspace = true }
+readme = "../../README.md"
+categories = ["command-line-utilities", "cryptography", "file-format"]
+keywords = ["post-quantum", "encryption", "container", "cli"]
+
+[[bin]]
+name = "qenc"
+path = "src/main.rs"
+
+[dependencies]
+qenc-core = { path = "../qenc-core" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+indicatif = { workspace = true }
+rayon = { workspace = true }
+humantime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+walkdir = { workspace = true }
+rand = { workspace = true }
+tempfile = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true

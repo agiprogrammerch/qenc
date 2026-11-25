@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-qenc-container">
+    <comment>QENC Post-Quantum Encrypted Container</comment>
+    <comment xml:lang="en">QENC Post-Quantum Encrypted Container</comment>
+    <glob pattern="*.qenc"/>
+    <magic priority="50">
+      <match value="QENC" type="string" offset="0"/>
+    </magic>
+    <icon name="application-x-qenc-container"/>
+  </mime-type>
+</mime-info>

@@ -1,0 +1,43 @@
+[package]
+name = "qenc-gui"
+version = "1.0.0"
+edition = "2021"
+description = "QENC Desktop GUI - Post-Quantum Encrypted Container with Hybrid X25519 + ML-KEM-1024 encryption"
+authors = ["QENC Contributors <https://github.com/qenc/qenc>"]
+license = "MIT"
+repository = "https://github.com/qenc/qenc"
+categories = ["gui", "cryptography", "security"]
+keywords = ["post-quantum", "encryption", "tauri", "ml-kem", "x25519", "argon2", "xchacha20poly1305", "zstd"]
+
+[lib]
+# Default lib name is the package name with dashes -> underscores (`qenc_gui`),
+# which is what `src/main.rs` imports. Crate types include `staticlib`/`cdylib`
+# so Tauri 2.0 can build the Android `.so` in CI.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+qenc-core = { path = "../crates/qenc-core" }
+tauri = { version = "2", features = ["default"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+url = "2"
+urlencoding = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+default = []
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

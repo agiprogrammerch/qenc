@@ -1,0 +1,43 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Tauri
+src-tauri/target/
+src-tauri/*.app/
+src-tauri/*.dmg/
+src-tauri/*.deb/
+src-tauri/*.msi/
+src-tauri/*.exe/
+src-tauri/*.apk/
+src-tauri/*.aab/
+src-tauri/bundle/
+
+# Test artifacts
+*.qenc
+*.qenc.pub
+*.qenc.sec
+test-*.qenc
+bench-*.qenc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

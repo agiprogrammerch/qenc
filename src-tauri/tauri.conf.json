@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "QENC",
+  "version": "1.0.0",
+  "identifier": "dev.arushshakya.qenc",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "QENC",
+        "width": 960,
+        "height": 660,
+        "minWidth": 420,
+        "minHeight": 620,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "visible": true,
+        "theme": "Dark",
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://localhost:1420; font-src 'self' data:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "resources": [],
+    "externalBin": [],
+    "copyright": "2024 QENC Contributors",
+    "category": "Utility",
+    "shortDescription": "Post-Quantum Encrypted Container",
+    "longDescription": "QENC - Post-Quantum Encrypted Container with Hybrid X25519 + ML-KEM-1024 (FIPS 203) encryption, Argon2id KDF, XChaCha20-Poly1305 AEAD, and Zstd compression. Zero telemetry, local-only operation.",
+    "license": "MIT",
+    "licenseFile": "",
+    "fileAssociations": [
+      {
+        "ext": ["qenc"],
+        "name": "QENC Container",
+        "mimeType": "application/x-qenc-container",
+        "description": "Post-Quantum Encrypted Container",
+        "role": "Editor"
+      }
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1", "librsvg2-common"],
+        "section": "utils",
+        "priority": "optional",
+        "postInstallScript": "packaging/postinst.sh"
+      }
+    },
+    "android": {
+      "minSdkVersion": 24,
+      "versionCode": 1
+    },
+    "macOS": {
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": null,
+      "providerShortName": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
