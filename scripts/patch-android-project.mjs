@@ -107,16 +107,26 @@ function patchGradle(original) {
   // compileSdk=36 and targetSdk=36 align with the `platforms;android-36` +
   // `build-tools;36.0.0` installed by the release workflow.
   //
-  // Kotlin DSL notes (Gradle 9.6.1 / AGP 9.3.1):
-  //   * `maybeCreate` instead of `create` so the block is safe even when the
-  //     generated template already declares a `release` signing config (it
-  //     reconfigures the existing one instead of throwing "already exists").
-  //     This is why we inject unconditionally: the env-driven signing must be
-  //     wired whatever template variant `tauri android init` produced.
+  // Kotlin DSL notes (Gradle 9.6.1 / AGP 9.x):
+  //   * `maybeCreate("release").apply { ... }`, NOT `maybeCreate("release") { ... }`.
+  //     `NamedDomainObjectContainer.maybeCreate(name: String)` has NO trailing-lambda
+  //     overload (unlike `create(name) { ... }`), so a trailing lambda is a hard
+  //     compile error: "Too many arguments for 'fun maybeCreate(name: String)".
+  //     `.apply { }` is the Kotlin-idiomatic way to configure the returned element.
+  //   * `maybeCreate` (not `create`) so the block is safe even when the generated
+  //     template already declares a `release` signing config (it reconfigures the
+  //     existing one instead of throwing "already exists"). This is why we inject
+  //     unconditionally: the env-driven signing must be wired whatever template
+  //     variant `tauri android init` produced.
   //   * Locals have distinct names from the DSL properties they assign
   //     (`keyAlias = keyAlias` would shadow and silently no-op).
   //   * Every env var is null-checked so a partial secret set degrades to the
-  //     unsigned/debug build instead of throwing a configuration error.
+  //     unsigned/debug build instead of throwing a configuration error, and so
+  //     `file(releaseKeystorePath)` / `storePassword = ...` smart-cast to
+  //     non-null types (`File` / `String`) and compile cleanly.
+  //   * `buildTypes.getByName("release") { ... }` — Gradle Kotlin DSL DOES provide
+  //     a trailing-lambda `getByName` for named domain object containers, so this
+  //     form is correct as-is.
   //   * A second top-level `android { }` block is legal Kotlin DSL: it
   //     configures the same AGP extension instance.
   {
@@ -124,7 +134,7 @@ function patchGradle(original) {
 ${MARKER}
 android {
     signingConfigs {
-        maybeCreate("release") {
+        maybeCreate("release").apply {
             val releaseKeystorePath = System.getenv("QENC_KEYSTORE_PATH")
             val releaseKeystorePassword = System.getenv("QENC_KEYSTORE_PASSWORD")
             val releaseKeyAlias = System.getenv("QENC_KEY_ALIAS")
