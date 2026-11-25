@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve version
         id: vars
@@ -42,7 +42,7 @@ jobs:
           echo "Resolved version: $VERSION (tag $TAG)"
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -95,7 +95,7 @@ jobs:
           ls -lh release-assets
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-assets
           path: release-assets/*
@@ -105,7 +105,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve version
         id: vars
@@ -123,7 +123,7 @@ jobs:
           echo "Resolved version: $VERSION"
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -183,7 +183,7 @@ jobs:
           Get-ChildItem release-assets | Select-Object Name, Length
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-assets
           path: release-assets/*
@@ -193,7 +193,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve version
         id: vars
@@ -210,7 +210,7 @@ jobs:
           echo "Resolved version: $VERSION"
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -326,18 +326,38 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.vars.outputs.VERSION }}"
           mkdir -p release-assets
-          SIGNED=$(find src-tauri/gen/android/app/build/outputs/apk -name "universal-release.apk" | head -n1 || true)
+
+          echo "All APKs produced under src-tauri/gen/android/app/build/outputs/apk:"
+          find src-tauri/gen/android/app/build/outputs/apk -type f -name "*.apk" -print | sort | sed 's/^/    /'
+
+          # Gradle's universal APK is `app-universal-release.apk`; exclude any
+          # `*-unsigned.apk` so a debug/unsigned artifact can never be mistaken
+          # for the signed release build.
+          SIGNED=$(find src-tauri/gen/android/app/build/outputs/apk -type f \
+            -name "*universal-release.apk" ! -name "*-unsigned.apk" | sort | head -n1 || true)
+
           if [ -n "$SIGNED" ]; then
+            echo "Signed universal release APK: $SIGNED"
+
+            # Cryptographically verify the APK signature before shipping it.
+            # `set -e` above aborts the job immediately if verification fails.
+            APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+            "$APKSIGNER" verify --print-certs "$SIGNED"
+            echo "APK signature verified with $APKSIGNER"
+
             cp "$SIGNED" "release-assets/qenc-${VERSION}-android-7-to-16-universal.apk"
+          elif [ -n "${QENC_KEYSTORE_PATH:-}" ]; then
+            echo "::error::Release keystore was configured, but no signed universal-release APK was produced."
+            exit 1
           else
-            ANY=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n1)
-            cp "$ANY" "release-assets/qenc-${VERSION}-android-7-to-16-universal-unsigned.apk"
-            echo "::warning::Copied unsigned APK (no release signing configured)."
+            echo "::warning::No signed APK found and QENC_KEYSTORE_PATH is empty — packaging an unsigned APK (manual test run)."
+            UNSIGNED=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name "*.apk" | sort | head -n1 || true)
+            cp "$UNSIGNED" "release-assets/qenc-${VERSION}-android-7-to-16-universal-unsigned.apk"
           fi
           ls -lh release-assets
 
       - name: Upload Android artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-assets
           path: release-assets/*
@@ -349,7 +369,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
@@ -361,7 +381,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-assets/*
           generate_release_notes: true
