@@ -57,6 +57,11 @@ pub fn run() {
             take_pending_open_file,
         ])
         .setup(|app| {
+            // On Android/Windows the desktop-only block below compiles away,
+            // which would leave `app` unused; borrow it once so every target
+            // builds with zero warnings.
+            let _ = &app;
+
             // Check for .qenc file passed as command-line argument
             #[cfg(desktop)]
             {

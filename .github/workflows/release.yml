@@ -145,8 +145,18 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      - name: Relax Windows Defender for the build (never fails)
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE", "$env:LOCALAPPDATA\tauri", "$env:TEMP"
+            Write-Host "Added Windows Defender exclusions for workspace and Tauri NSIS cache."
+          } catch {
+            Write-Warning "Could not add Defender exclusions: $_"
+          }
+
       - name: Build Tauri NSIS installer
-        run: npm run tauri build -- --bundles nsis
+        run: npm run tauri build -- --bundles nsis --no-binary-patching --verbose
 
       - name: Build headless CLI
         run: cargo build --release -p qenc-cli

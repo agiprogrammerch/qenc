@@ -49,7 +49,7 @@
     "shortDescription": "Post-Quantum Encrypted Container",
     "longDescription": "QENC - Post-Quantum Encrypted Container with Hybrid X25519 + ML-KEM-1024 (FIPS 203) encryption, Argon2id KDF, XChaCha20-Poly1305 AEAD, and Zstd compression. Zero telemetry, local-only operation.",
     "license": "MIT",
-    "licenseFile": "",
+    "licenseFile": null,
     "fileAssociations": [
       {
         "ext": ["qenc"],

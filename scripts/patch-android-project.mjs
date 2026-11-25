@@ -61,25 +61,23 @@ function locateFiles() {
   return { gradle, manifest };
 }
 
-/** Idempotently replace `key = <value>` inside Gradle Kotlin DSL. */
+/**
+ * Idempotently rewrite a Gradle Kotlin DSL scalar, replacing the ENTIRE line.
+ *
+ * Tauri CLI 2.12.x emits both plain (`compileSdk = 35`) and parenthesized forms
+ * (`minSdk = tauriProperties.getProperty("tauri.android.minSdk", "24").toInt()`
+ * and even `compileSdk(36)`). Matching the whole line up to the newline keeps
+ * whatever expression form the template used from leaking into the output —
+ * the previous partial-line regex left stray `)` characters
+ * (`compileSdk = 36)`) which broke Kotlin DSL compilation under Gradle 9.6.1 /
+ * AGP 9.3.1.
+ */
 function replaceGradleScalar(src, key, value) {
-  // Matches: key = <something up to end of line or closing paren>  (single assignment)
-  const re = new RegExp(`(\\b${key}\\s*=\\s*)([^\\n)]+)(\\)?)`, 'g');
+  const re = new RegExp(`^([ \\t]*)${key}\\b[^\\r\\n]*(\\r?)$`, 'gm');
   let found = false;
-  const out = src.replace(re, (_m, prefix) => {
+  const out = src.replace(re, (_m, indent, cr) => {
     found = true;
-    return `${prefix}${value})`;
-  });
-  return { out, found };
-}
-
-/** Idempotently replace `key(<value>)` (function-call form used for compileSdk). */
-function replaceGradleCall(src, key, value) {
-  const re = new RegExp(`(\\b${key}\\s*\\(\\s*)[^)]*?(\\))`, 'g');
-  let found = false;
-  const out = src.replace(re, (_m, prefix, suffix) => {
-    found = true;
-    return `${prefix}${value}${suffix}`;
+    return `${indent}${key} = ${value}${cr}`;
   });
   return { out, found };
 }
@@ -87,27 +85,20 @@ function replaceGradleCall(src, key, value) {
 function patchGradle(original) {
   let src = original;
   if (src.includes(MARKER)) {
-    // Already patched: still normalize SDK scalars idempotently below.
-    src = src.replace(new RegExp(`${MARKER}[\\s\\S]*?${MARKER_END}\\n?`, 'm'), '');
+    // Already patched: strip our previous block so re-runs stay idempotent.
+    // The leading `\n?` matters: without it each re-run would leave one extra
+    // blank line behind and the file would grow on every invocation.
+    src = src.replace(new RegExp(`\\n?${MARKER}[\\s\\S]*?${MARKER_END}\\n?`, 'm'), '');
   }
 
   for (const [key, val] of [
     ['minSdk', MIN_SDK],
     ['targetSdk', TARGET_SDK],
+    ['compileSdk', COMPILE_SDK],
   ]) {
     const { out, found } = replaceGradleScalar(src, key, val);
     src = out;
-    if (!found) console.warn(`patch-android-project: note: '${key}' scalar not found; re-injecting.`);
-  }
-
-  // compileSdk may be either `compileSdk = ...` or `compileSdk(...)`.
-  const callRes = replaceGradleCall(src, 'compileSdk', COMPILE_SDK);
-  if (callRes.found) {
-    src = callRes.out;
-  } else {
-    const scalarRes = replaceGradleScalar(src, 'compileSdk', COMPILE_SDK);
-    src = scalarRes.out;
-    if (!scalarRes.found) console.warn(`patch-android-project: note: 'compileSdk' not found in template.`);
+    if (!found) console.warn(`patch-android-project: note: '${key}' scalar not found in template; leaving it to tauri.properties.`);
   }
 
   // Inject the signing config block idempotently.
@@ -115,19 +106,39 @@ function patchGradle(original) {
   // transparently via storeFile/storePassword/keyAlias/keyPassword. minSdk=24,
   // compileSdk=36 and targetSdk=36 align with the `platforms;android-36` +
   // `build-tools;36.0.0` installed by the release workflow.
-  const hasSigningBlock = /signingConfigs\s*\{/.test(src);
-  if (!hasSigningBlock) {
+  //
+  // Kotlin DSL notes (Gradle 9.6.1 / AGP 9.3.1):
+  //   * `maybeCreate` instead of `create` so the block is safe even when the
+  //     generated template already declares a `release` signing config (it
+  //     reconfigures the existing one instead of throwing "already exists").
+  //     This is why we inject unconditionally: the env-driven signing must be
+  //     wired whatever template variant `tauri android init` produced.
+  //   * Locals have distinct names from the DSL properties they assign
+  //     (`keyAlias = keyAlias` would shadow and silently no-op).
+  //   * Every env var is null-checked so a partial secret set degrades to the
+  //     unsigned/debug build instead of throwing a configuration error.
+  //   * A second top-level `android { }` block is legal Kotlin DSL: it
+  //     configures the same AGP extension instance.
+  {
     const signing = `
 ${MARKER}
 android {
     signingConfigs {
-        create("release") {
-            val keystorePath = System.getenv("QENC_KEYSTORE_PATH")
-            if (keystorePath != null) {
-                storeFile = file(keystorePath)
-                storePassword = System.getenv("QENC_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("QENC_KEY_ALIAS")
-                keyPassword = System.getenv("QENC_KEY_PASSWORD")
+        maybeCreate("release") {
+            val releaseKeystorePath = System.getenv("QENC_KEYSTORE_PATH")
+            val releaseKeystorePassword = System.getenv("QENC_KEYSTORE_PASSWORD")
+            val releaseKeyAlias = System.getenv("QENC_KEY_ALIAS")
+            val releaseKeyPassword = System.getenv("QENC_KEY_PASSWORD")
+            if (
+                releaseKeystorePath != null &&
+                releaseKeystorePassword != null &&
+                releaseKeyAlias != null &&
+                releaseKeyPassword != null
+            ) {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
