@@ -3,6 +3,7 @@
 use std::fs::{File, DirBuilder, Metadata, read_dir};
 use std::io::{Read, Write};
 use std::path::{Path, Component};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::sync::atomic::AtomicU64;
 use tar::{Builder, Archive, EntryType, Header};
@@ -188,20 +189,58 @@ fn add_to_tar<W: Write>(builder: &mut Builder<W>, root: &Path, path: &Path, pp: 
     Ok(())
 }
 
+/// Seconds since the Unix epoch for a file's modification time.
+///
+/// Uses `Metadata::modified()` on every platform (Linux, Windows, Android) so
+/// timestamp handling is identical everywhere. Pre-epoch or unavailable
+/// timestamps degrade to `0` instead of wrapping to a huge value.
+fn mtime_secs(metadata: &Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Resolves the `(mode, mtime, uid, gid)` tuple for a TAR header, cross-platform.
+///
+/// On Unix the real POSIX mode bits / owner are preserved from the filesystem.
+/// On Windows and Android (`std::os::unix::fs::MetadataExt` is unavailable) we
+/// record deterministic, POSIX-friendly defaults: `0o755` for directories,
+/// `0o644` for regular files, `uid = gid = 0`. `mtime` always comes from
+/// [`mtime_secs`] so archives stay portable between all three platforms.
+fn header_mode_mtime_owner(is_dir: bool, metadata: &Metadata) -> (u32, u64, u64, u64) {
+    #[cfg(unix)]
+    {
+        let _ = is_dir;
+        (
+            metadata.mode() & 0o777,
+            mtime_secs(metadata),
+            u64::from(metadata.uid()),
+            u64::from(metadata.gid()),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let mode = if is_dir { 0o755 } else { 0o644 };
+        (mode, mtime_secs(metadata), 0, 0)
+    }
+}
+
 /// Adds a regular file to the TAR archive using `append_data` which
 /// automatically handles GNU `LongName` extensions for paths > 100 bytes.
 fn add_file_to_tar<W: Write>(builder: &mut Builder<W>, path: &Path, rel_path: &Path, metadata: &Metadata, pp: &mut PackProgress<'_>) -> Result<()> {
     let file = File::open(path)
         .map_err(|e| QencError::Archive(format!("Failed to open {}: {}", path.display(), e)))?;
 
+    let (mode, mtime, uid, gid) = header_mode_mtime_owner(false, metadata);
+
     let mut header = Header::new_gnu();
     header.set_size(metadata.len());
-    header.set_mode(metadata.mode() & 0o777);
-    let mtime = metadata.mtime();
-    #[allow(clippy::cast_sign_loss)]
-    header.set_mtime(mtime as u64);
-    header.set_uid(u64::from(metadata.uid()));
-    header.set_gid(u64::from(metadata.gid()));
+    header.set_mode(mode);
+    header.set_mtime(mtime);
+    header.set_uid(uid);
+    header.set_gid(gid);
     header.set_cksum();
 
     // Wrap in a counting reader so raw input bytes are tracked for progress.
@@ -292,6 +331,23 @@ fn add_symlink_to_tar<W: Write>(builder: &mut Builder<W>, path: &Path, rel_path:
     Ok(())
 }
 
+/// Windows fallback used when the OS refuses to create a symlink
+/// (`SeCreateSymbolicLinkPrivilege` missing / Developer Mode disabled).
+///
+/// Copies the link target's contents when it is a regular file so the extracted
+/// payload is still usable. Returns `false` when nothing could be materialized
+/// (missing or non-regular target), letting the caller skip the entry safely.
+#[cfg(windows)]
+fn materialize_symlink_target(link_canonical: &Path, target_path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(link_canonical) {
+        Ok(meta) if meta.is_file() => {
+            std::fs::copy(link_canonical, target_path).map_err(QencError::Io)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 /// Safely extracts a TAR archive to a destination directory.
 ///
 /// This function validates every entry path to prevent path traversal attacks.
@@ -378,11 +434,15 @@ pub fn extract_tar_stream<R: Read + Send>(reader: R, dest_dir: &Path) -> Result<
                 let link_target = header.link_name()
                     .map_err(|e| QencError::Archive(e.to_string()))?
                     .ok_or_else(|| QencError::Archive("Symlink missing target".into()))?;
+                // Normalize `Cow<'_, Path>` -> `&Path` up front: this keeps the
+                // `AsRef<Path>` bounds of `symlink{,_dir,_file}` satisfied on
+                // every platform (no reliance on blanket impls for `&Cow<Path>`).
+                let link_target: &Path = &link_target;
 
                 // Resolve the symlink target relative to the target directory
                 let link_path = target_path.parent().ok_or_else(|| {
                     QencError::Archive("Failed to get parent directory of target path".into())
-                })?.join(&link_target);
+                })?.join(link_target);
                 let link_canonical = link_path.canonicalize()
                     .unwrap_or(link_path); // If target doesn't exist yet, use as-is
 
@@ -403,17 +463,28 @@ pub fn extract_tar_stream<R: Read + Send>(reader: R, dest_dir: &Path) -> Result<
                 // Create the symlink
                 #[cfg(unix)]
                 {
-                    std::os::unix::fs::symlink(&link_target, &target_path)
+                    std::os::unix::fs::symlink(link_target, &target_path)
                         .map_err(QencError::Io)?;
                 }
                 #[cfg(windows)]
                 {
-                    if link_canonical.is_dir() {
+                    // Creating a symlink on Windows needs SeCreateSymbolicLinkPrivilege
+                    // (Developer Mode or an elevated process). Handle denial gracefully:
+                    // materialize the target file's contents when it is a regular file,
+                    // otherwise skip the entry instead of failing the whole extraction.
+                    let created = if link_canonical.is_dir() {
                         std::os::windows::fs::symlink_dir(&link_target, &target_path)
-                            .map_err(|e| QencError::Io(e))?;
                     } else {
                         std::os::windows::fs::symlink_file(&link_target, &target_path)
-                            .map_err(|e| QencError::Io(e))?;
+                    };
+                    match created {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            if !materialize_symlink_target(&link_canonical, &target_path)? {
+                                continue;
+                            }
+                        }
+                        Err(e) => return Err(QencError::Io(e)),
                     }
                 }
             }
@@ -422,8 +493,10 @@ pub fn extract_tar_stream<R: Read + Send>(reader: R, dest_dir: &Path) -> Result<
                 let link_target = header.link_name()
                     .map_err(|e| QencError::Archive(e.to_string()))?
                     .ok_or_else(|| QencError::Archive("Hard link missing target".into()))?;
+                // Normalize `Cow<'_, Path>` -> `&Path` (see the symlink arm above).
+                let link_target: &Path = &link_target;
 
-                let link_path = dest_canonical.join(&link_target);
+                let link_path = dest_canonical.join(link_target);
                 if !link_path.starts_with(&dest_canonical) {
                     return Err(QencError::PathTraversal(format!(
                         "Hard link {} points outside destination", path.display()
@@ -573,7 +646,10 @@ mod tests {
         assert_eq!(fs::read(dest.path().join("mydir/subdir/file3.txt")).unwrap(), b"File 3");
     }
 
+    // Windows GitHub runners forbid unprivileged symlink creation (ERROR_PRIVILEGE_NOT_HELD,
+    // winerror 1314), so this test only runs on Unix.
     #[test]
+    #[cfg(unix)]
     fn test_tar_symlink() {
         let temp = TempDir::new().unwrap();
         let target = temp.path().join("target.txt");
@@ -800,7 +876,10 @@ mod tests {
         assert_eq!(fs::read(extracted).unwrap(), b"Long path test content");
     }
 
+    // Symlinks cannot be created by an unprivileged process on Windows
+    // (ERROR_PRIVILEGE_NOT_HELD / winerror 1314), so this test is Unix-only.
     #[test]
+    #[cfg(unix)]
     fn test_long_symlink_target() {
         let temp = TempDir::new().unwrap();
         let target = temp.path().join("target.txt");

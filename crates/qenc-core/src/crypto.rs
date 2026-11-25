@@ -325,12 +325,33 @@ pub fn decrypt_chunk(
     Ok(plaintext)
 }
 
+/// Best-effort hardening for secret-key files on disk.
+///
+/// On Unix the file mode is tightened to owner-only (`0o600`). On Windows and
+/// Android this is a no-op: `std::os::unix::fs::PermissionsExt` does not exist
+/// there, and the file already lives inside the user's private storage where
+/// ACLs (not POSIX bits) govern access.
+#[cfg(unix)]
+fn restrict_secret_key_perms(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o600);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+}
+
+/// No-op placeholder on non-Unix platforms (see [`restrict_secret_key_perms`]).
+#[cfg(not(unix))]
+fn restrict_secret_key_perms(_path: &Path) {}
+
 /// Saves a secret key to a file, optionally encrypted with a passphrase.
 pub fn save_secret_key<P: AsRef<Path>>(
     path: P,
     secret_key: &[u8; 64], // Simplified 64-byte format
     passphrase: Option<&str>,
 ) -> Result<()> {
+    let path = path.as_ref();
     let mut file = File::create(path)?;
 
     if let Some(pass) = passphrase {
@@ -356,6 +377,7 @@ pub fn save_secret_key<P: AsRef<Path>>(
         file.write_all(secret_key)?;
     }
 
+    restrict_secret_key_perms(path);
     Ok(())
 }
 
@@ -409,6 +431,7 @@ pub fn save_full_secret_key<P: AsRef<Path>>(
     secret_key: &HybridSecretKey,
     passphrase: Option<&str>,
 ) -> Result<()> {
+    let path = path.as_ref();
     let bytes = secret_key.to_bytes();
     let mut file = File::create(path)?;
 
@@ -432,6 +455,7 @@ pub fn save_full_secret_key<P: AsRef<Path>>(
         file.write_all(&bytes)?;
     }
 
+    restrict_secret_key_perms(path);
     Ok(())
 }
 

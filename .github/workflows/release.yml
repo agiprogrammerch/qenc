@@ -156,13 +156,21 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.vars.outputs.VERSION }}"
-          mkdir -p release-assets
+          mkdir -p release-assets cli-pkg
           SETUP=$(ls target/release/bundle/nsis/*-setup.exe 2>/dev/null || ls src-tauri/target/release/bundle/nsis/*-setup.exe)
           cp "$SETUP" "release-assets/qenc-${VERSION}-windows-x64-setup.exe"
           CLI=$(ls target/release/qenc.exe 2>/dev/null || ls src-tauri/target/release/qenc.exe)
-          mkdir -p cli-pkg && cp "$CLI" cli-pkg/qenc.exe
-          (cd cli-pkg && 7z a "../release-assets/qenc-cli-${VERSION}-windows-x64.zip" qenc.exe)
+          cp "$CLI" cli-pkg/qenc.exe
           ls -lh release-assets
+
+      - name: Package headless CLI (zip)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.vars.outputs.VERSION }}"
+          $dest = "release-assets\qenc-cli-$version-windows-x64.zip"
+          if (Test-Path $dest) { Remove-Item -Force $dest }
+          Compress-Archive -Path cli-pkg\qenc.exe -DestinationPath $dest -Force
+          Get-ChildItem release-assets | Select-Object Name, Length
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -198,7 +206,7 @@ jobs:
           cache: npm
 
       - name: Set up JDK 17 (Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -216,21 +224,57 @@ jobs:
             crates/qenc-cli
             src-tauri
 
-      - name: Set up Android SDK (API 36 + NDK)
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: latest
-
-      - name: Install SDK platforms/build-tools/NDK
+      - name: Set up Android SDK (API 36 + NDK) from the runner's pre-installed SDK
+        shell: bash
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          set -euo pipefail
+          # The ubuntu-latest image ships the Android SDK at /usr/local/lib/android/sdk
+          # with cmdline-tools already installed — use it directly (android-actions/
+          # setup-android@v3 crashes on the deprecated `sdkmanager tools` command).
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
-      - name: Export Android env
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found at $SDKMANAGER (SDK_ROOT=$SDK_ROOT)"
+            exit 1
+          fi
+
+          # Accept licenses: `yes` gets SIGPIPE'd once sdkmanager stops reading,
+          # which under `set -o pipefail` surfaces as exit 141. Disable pipefail
+          # around the pipe so a benign early-close never fails the step.
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          set -o pipefail
+
+          "$SDKMANAGER" --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.2.12479018"
+
+          NDK_PATH="$SDK_ROOT/ndk/27.2.12479018"
+          {
+            echo "ANDROID_HOME=$SDK_ROOT"
+            echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+            echo "NDK_HOME=$NDK_PATH"
+            echo "ANDROID_NDK_HOME=$NDK_PATH"
+          } >> "$GITHUB_ENV"
+          {
+            echo "$SDK_ROOT/cmdline-tools/latest/bin"
+            echo "$SDK_ROOT/platform-tools"
+          } >> "$GITHUB_PATH"
+          echo "Android SDK ready at $SDK_ROOT (NDK $NDK_PATH)"
+
+      - name: Verify Android SDK exports
+        shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          set -euo pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "NDK_HOME=$NDK_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -d "$NDK_HOME"
+          sdkmanager --version
 
       - name: Install JS dependencies
         run: npm ci
